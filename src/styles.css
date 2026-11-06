@@ -1,0 +1,117 @@
+@import "tailwindcss";
+@import "@fontsource/outfit/400.css";
+@import "@fontsource/outfit/500.css";
+@import "@fontsource/outfit/600.css";
+@import "@fontsource/fraunces/500.css";
+@import "@fontsource/fraunces/600.css";
+@import "maplibre-gl/dist/maplibre-gl.css";
+
+@theme {
+  --color-bg: #121410;
+  --color-surface: #1c1f1a;
+  --color-fg: #f3efe6;
+  --color-muted: #9a9488;
+  --color-signal: #e39a3c;
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces", Georgia, serif;
+}
+
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  html,
+  body {
+    background: var(--color-bg);
+    color: var(--color-fg);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    min-height: 100dvh;
+    text-rendering: optimizeLegibility;
+  }
+
+  button,
+  a,
+  input {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+.press {
+  transition: scale 150ms ease-out;
+}
+
+.press:active:not(:disabled) {
+  scale: 0.96;
+}
+
+.dock {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
+.stagger > * {
+  animation: casillego-in 420ms ease-out both;
+}
+
+.stagger > *:nth-child(2) {
+  animation-delay: 70ms;
+}
+.stagger > *:nth-child(3) {
+  animation-delay: 140ms;
+}
+.stagger > *:nth-child(4) {
+  animation-delay: 210ms;
+}
+
+@keyframes casillego-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.casillego-user,
+.casillego-board,
+.casillego-alight {
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px var(--color-bg);
+}
+
+.casillego-user {
+  width: 16px;
+  height: 16px;
+  background: var(--color-signal);
+  box-shadow:
+    0 0 0 2px var(--color-bg),
+    0 0 0 7px color-mix(in srgb, var(--color-signal) 35%, transparent);
+}
+
+.casillego-board {
+  width: 12px;
+  height: 12px;
+  background: var(--color-bg);
+  border: 2px solid var(--color-fg);
+}
+
+.casillego-alight {
+  width: 16px;
+  height: 16px;
+  background: var(--color-fg);
+  border: 3px solid var(--color-signal);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stagger > *,
+  .press {
+    animation: none;
+    transition: none;
+  }
+}
