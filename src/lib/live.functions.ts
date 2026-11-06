@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { bearingDegrees, cardinalName, haversine } from "@/lib/geo";
 import { kindLabel, matchesMode } from "@/lib/match-place";
 import type { Mode, Place } from "@/lib/types";
 
@@ -321,6 +322,68 @@ export const nearbyPlaces = createServerFn({ method: "POST" })
       places: [],
       error: "Las estaciones cercanas no respondieron. Busca por nombre: eso sigue en vivo.",
     };
+  });
+
+const exitSchema = z.object({
+  lat: z.number().gte(-90).lte(90),
+  lon: z.number().gte(-180).lte(180),
+});
+
+export const stationExits = createServerFn({ method: "POST" })
+  .validator((input: unknown) => exitSchema.parse(input))
+  .handler(async ({ data }) => {
+    const key = `x:${data.lat.toFixed(4)}:${data.lon.toFixed(4)}`;
+    const cached = recall(key);
+    if (cached) return cached;
+    if (await limited()) return { places: [] as Place[], error: null };
+    await preferV4();
+    const la = data.lat.toFixed(5);
+    const lo = data.lon.toFixed(5);
+    const query = `[out:json][timeout:8];(node["railway"="subway_entrance"](around:280,${la},${lo});node["entrance"](around:140,${la},${lo}););out body 16;`;
+    const body = new URLSearchParams({ data: query });
+    for (const endpoint of OVERPASS) {
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { Accept: "application/json", "User-Agent": UA },
+          body,
+          signal: AbortSignal.timeout(7000),
+        });
+        if (!res.ok) continue;
+        const json = (await res.json()) as {
+          elements?: Array<{ type: string; id: number; lat?: number; lon?: number; tags?: Record<string, string> }>;
+        };
+        const places: Place[] = [];
+        const seen = new Set<string>();
+        for (const element of json.elements ?? []) {
+          if (element.lat == null || element.lon == null) continue;
+          const tags = element.tags ?? {};
+          if (tags.highway === "bus_stop") continue;
+          const dist = haversine(data, { lat: element.lat, lon: element.lon });
+          if (dist < 12 || dist > 320) continue;
+          const side = cardinalName(bearingDegrees(data, { lat: element.lat, lon: element.lon }));
+          const raw = (tags.name || "").trim();
+          const generic = !raw || /^salida$/i.test(raw) || /^entrada$/i.test(raw);
+          const name = generic ? side.charAt(0).toUpperCase() + side.slice(1) : raw;
+          const id = `${element.type}:${element.id}`;
+          if (seen.has(name.toLocaleLowerCase("es"))) continue;
+          seen.add(name.toLocaleLowerCase("es"));
+          places.push({
+            id,
+            name,
+            detail: "Salida marcada en el mapa",
+            lat: element.lat,
+            lon: element.lon,
+            kind: "Salida",
+          });
+          if (places.length >= 8) break;
+        }
+        return remember(key, { places, error: null });
+      } catch {
+        /* next mirror */
+      }
+    }
+    return { places: [] as Place[], error: null };
   });
 
 export const reversePlace = createServerFn({ method: "POST" })

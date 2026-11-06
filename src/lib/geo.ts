@@ -66,13 +66,31 @@ export function bearingDegrees(
 
 const CARDINALS = ["norte", "noreste", "este", "sureste", "sur", "suroeste", "oeste", "noroeste"];
 
+export function cardinalName(bearing: number): string {
+  const deg = ((bearing % 360) + 360) % 360;
+  return CARDINALS[Math.round(deg / 45) % 8];
+}
+
 export function sideLabel(bearing: number, heading: number | null): string {
   const deg = ((bearing % 360) + 360) % 360;
-  if (heading == null || !Number.isFinite(heading)) return `Queda al ${CARDINALS[Math.round(deg / 45) % 8]}`;
+  if (heading == null || !Number.isFinite(heading)) return `Queda al ${cardinalName(deg)}`;
   let rel = (deg - heading + 360) % 360;
   if (rel > 180) rel -= 360;
   const abs = Math.abs(rel);
   if (abs <= 35) return "Queda adelante";
   if (abs >= 145) return "Queda atrás";
   return rel > 0 ? "Queda a la derecha" : "Queda a la izquierda";
+}
+
+export function movePoint(
+  from: { lat: number; lon: number },
+  bearing: number,
+  meters: number,
+): { lat: number; lon: number } {
+  const earth = 6378137;
+  const rad = ((bearing % 360) + 360) % 360 * (Math.PI / 180);
+  const dLat = ((meters * Math.cos(rad)) / earth) * (180 / Math.PI);
+  const dLon =
+    ((meters * Math.sin(rad)) / (earth * Math.cos((from.lat * Math.PI) / 180))) * (180 / Math.PI);
+  return { lat: from.lat + dLat, lon: from.lon + dLon };
 }

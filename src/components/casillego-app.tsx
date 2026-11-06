@@ -22,8 +22,8 @@ import {
   X,
 } from "lucide-react";
 import { acquireWake, releaseWake, startSiren, startVibrate, stopAlarm, unlockAudio } from "@/lib/alarm";
-import { CITY_CENTER, bearingDegrees, clampMeters, formatDistance, haversine, sideLabel, walkingLabel } from "@/lib/geo";
-import { nearbyPlaces, reversePlace, searchPlaces } from "@/lib/live.functions";
+import { CITY_CENTER, bearingDegrees, clampMeters, formatDistance, haversine, movePoint, sideLabel, walkingLabel } from "@/lib/geo";
+import { nearbyPlaces, reversePlace, searchPlaces, stationExits } from "@/lib/live.functions";
 import { useCasillego, type ActiveTrip } from "@/lib/store";
 import { MODES, modeLabel, type Mode, type Place, type SavedRoute } from "@/lib/types";
 import { RideMap } from "@/components/ride-map";
@@ -973,6 +973,44 @@ function ModePicker({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => 
   );
 }
 
+const EXIT_SIDES: Array<[string, number]> = [
+  ["Norte", 0],
+  ["Oriente", 90],
+  ["Sur", 180],
+  ["Poniente", 270],
+];
+
+function sideChoices(station: Place): Place[] {
+  return EXIT_SIDES.map(([name, bearing]) => {
+    const point = movePoint(station, bearing, 70);
+    return {
+      id: `lado:${station.id}:${name}`,
+      name,
+      detail: "Lado aproximado de la estación",
+      lat: point.lat,
+      lon: point.lon,
+      kind: "Salida",
+    };
+  });
+}
+
+function mergeExits(local: Place[], live: Place[]): Place[] {
+  const next = local.map((item) => ({ ...item }));
+  const extras: Place[] = [];
+  for (const exit of live) {
+    const slot = next.find((item) => item.name.toLocaleLowerCase("es") === exit.name.toLocaleLowerCase("es"));
+    if (slot) {
+      slot.id = exit.id;
+      slot.lat = exit.lat;
+      slot.lon = exit.lon;
+      slot.detail = exit.detail;
+    } else {
+      extras.push(exit);
+    }
+  }
+  return [...extras, ...next];
+}
+
 function PlaceField({
   label,
   mode,
@@ -998,6 +1036,35 @@ function PlaceField({
   const req = useRef(0);
   const casa = useCasillego((state) => state.anchors?.casa ?? null);
   const trabajo = useCasillego((state) => state.anchors?.trabajo ?? null);
+  const [exits, setExits] = useState<Place[]>([]);
+  const [station, setStation] = useState<Place | null>(null);
+
+  useEffect(() => {
+    if (!value) {
+      setStation(null);
+      setExits([]);
+      return;
+    }
+    if (value.kind === "Salida") return;
+    const stationish = value.kind === "Estación" || value.kind === "Cable";
+    if (!stationish) {
+      setStation(null);
+      setExits([]);
+      return;
+    }
+    setStation(value);
+    const local = sideChoices(value);
+    setExits(local);
+    let live = true;
+    void stationExits({ data: { lat: value.lat, lon: value.lon } })
+      .then((result) => {
+        if (live) setExits(mergeExits(local, result.places));
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [value]);
 
   useEffect(() => {
     if (q.trim().length < 2) {
@@ -1058,6 +1125,35 @@ function PlaceField({
               Es mi trabajo
             </button>
           </div>
+          {station && exits.length > 0 ? (
+            <div className="mt-3">
+              <p className="text-sm text-muted">Salida</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {exits.map((exit) => {
+                  const picked = value.kind === "Salida" && value.id === exit.id;
+                  return (
+                    <button
+                      key={exit.id}
+                      type="button"
+                      className={`press h-9 rounded-full px-3 text-sm ${picked ? "bg-signal text-bg" : "bg-bg text-fg"}`}
+                      onClick={() =>
+                        onChange({
+                          ...exit,
+                          name: `${station.name.split("·")[0].trim()} · ${exit.name}`,
+                          kind: "Salida",
+                        })
+                      }
+                    >
+                      {exit.name}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-2 text-xs text-muted">
+                Norte, sur, oriente y poniente son un lado aproximado. Si el mapa tiene la puerta, se usa esa.
+              </p>
+            </div>
+          ) : null}
         </>
       ) : (
         <>

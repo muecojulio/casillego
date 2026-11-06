@@ -19,8 +19,8 @@ export function PrivacyCopy() {
         <ul className="list-disc space-y-1 pl-5 text-muted">
           <li>El texto de búsqueda va a Nominatim (OpenStreetMap), una consulta a la vez.</li>
           <li>
-            Si pides estaciones cerca, las coordenadas aproximadas van a un servidor público
-            Overpass de OpenStreetMap.
+            Si pides estaciones cerca o las salidas de una parada, las coordenadas aproximadas van a un
+            servidor público Overpass de OpenStreetMap.
           </li>
           <li>El mapa se dibuja con teselas de OpenFreeMap, también de OpenStreetMap.</li>
         </ul>
