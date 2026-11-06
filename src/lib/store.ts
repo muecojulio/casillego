@@ -21,10 +21,17 @@ export type ActiveTrip = {
   alarmed: boolean;
 };
 
+export type ArrivalNote = {
+  meters: number;
+  name: string;
+  at: number;
+};
+
 type State = {
   routes: SavedRoute[];
   settings: Settings;
   trip: ActiveTrip | null;
+  lastArrival: ArrivalNote | null;
   saveRoute: (route: SavedRoute) => void;
   removeRoute: (id: string) => void;
   clearRoutes: () => void;
@@ -33,6 +40,8 @@ type State = {
   markAlarmed: () => void;
   rearm: () => void;
   endTrip: () => void;
+  noteArrival: (note: ArrivalNote) => void;
+  dismissArrival: () => void;
 };
 
 const defaultSettings: Settings = {
@@ -48,6 +57,7 @@ export const useCasillego = create<State>()(
       routes: [],
       settings: defaultSettings,
       trip: null,
+      lastArrival: null,
       saveRoute: (route) =>
         set((state) => ({
           routes: [route, ...state.routes.filter((item) => item.id !== route.id)].slice(0, 40),
@@ -71,6 +81,8 @@ export const useCasillego = create<State>()(
       rearm: () =>
         set((state) => (state.trip ? { trip: { ...state.trip, alarmed: false } } : state)),
       endTrip: () => set({ trip: null }),
+      noteArrival: (note) => set({ lastArrival: note }),
+      dismissArrival: () => set({ lastArrival: null }),
     }),
     { name: "casillego-v1", skipHydration: true },
   ),

@@ -17,7 +17,7 @@ export function PrivacyCopy() {
         <h2 className="font-display text-xl text-fg">Qué sale del teléfono</h2>
         <p>Solo cuando tú buscas o pides tu ubicación:</p>
         <ul className="list-disc space-y-1 pl-5 text-muted">
-          <li>El texto de búsqueda va a Photon (Komoot), sobre datos de OpenStreetMap.</li>
+          <li>El texto de búsqueda va a Nominatim (OpenStreetMap), una consulta a la vez.</li>
           <li>
             Si pides estaciones cerca, las coordenadas aproximadas van a un servidor público
             Overpass de OpenStreetMap.

@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import * as Slider from "@radix-ui/react-slider";
 import * as Switch from "@radix-ui/react-switch";
 import {
+  ArrowLeftRight,
   Bell,
   Bus,
   Cable,
@@ -21,7 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { acquireWake, releaseWake, startSiren, startVibrate, stopAlarm, unlockAudio } from "@/lib/alarm";
-import { CITY_CENTER, clampMeters, formatDistance, haversine } from "@/lib/geo";
+import { CITY_CENTER, clampMeters, formatDistance, haversine, walkingLabel } from "@/lib/geo";
 import { nearbyPlaces, reversePlace, searchPlaces } from "@/lib/live.functions";
 import { useCasillego, type ActiveTrip } from "@/lib/store";
 import { MODES, modeLabel, type Mode, type Place, type SavedRoute } from "@/lib/types";
@@ -238,6 +239,8 @@ export function CasillegoApp() {
   }
 
   function finish() {
+    const current = useCasillego.getState().trip;
+    const meters = distance;
     stopAlarm();
     void releaseWake();
     firedRef.current = false;
@@ -245,6 +248,13 @@ export function CasillegoApp() {
     setAlarming(false);
     setSilenced(false);
     useCasillego.getState().endTrip();
+    if (current && meters != null && Number.isFinite(meters)) {
+      useCasillego.getState().noteArrival({
+        meters: Math.max(0, Math.round(meters)),
+        name: current.alight.name,
+        at: Date.now(),
+      });
+    }
     setView({ id: "hoy" });
   }
 
@@ -445,6 +455,8 @@ function Home({
   onStart: (trip: ActiveTrip) => void;
 }) {
   const everyday = routes.filter((route) => route.everyday).slice(0, 4);
+  const lastArrival = useCasillego((state) => state.lastArrival);
+  const suggested = lastArrival ? clampMeters(lastArrival.meters) : null;
   return (
     <div className="flex-1 px-5 pt-8 pb-4">
       <header className="stagger">
@@ -479,6 +491,37 @@ function Home({
           </li>
         ))}
       </ol>
+      {lastArrival ? (
+        <section className="mt-6 rounded-3xl border border-signal/40 bg-surface px-4 py-4">
+          <p className="text-sm text-muted">Última bajada</p>
+          <p className="mt-1 font-medium">
+            Bajaste a {formatDistance(lastArrival.meters)} de {lastArrival.name}.
+          </p>
+          <p className="mt-1 text-sm text-muted">
+            Puedes usar esa distancia como aviso la próxima vez.
+          </p>
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              className={`${primary} h-11 w-auto! flex-1`}
+              onClick={() => {
+                if (suggested == null) return;
+                useCasillego.getState().updateSettings({ defaultAlertMeters: suggested });
+                useCasillego.getState().dismissArrival();
+              }}
+            >
+              Usar {suggested != null ? formatDistance(suggested) : ""}
+            </button>
+            <button
+              type="button"
+              className={`${quiet} h-11`}
+              onClick={() => useCasillego.getState().dismissArrival()}
+            >
+              Ahora no
+            </button>
+          </div>
+        </section>
+      ) : null}
       <section className="mt-8">
         <h2 className="text-sm text-muted">Rutas cotidianas</h2>
         {everyday.length === 0 ? (
@@ -556,6 +599,12 @@ function FilterChip({
   );
 }
 
+function returnName(route: SavedRoute) {
+  const parts = route.name.split("→").map((part) => part.trim());
+  if (parts.length === 2 && parts[0] && parts[1]) return `${parts[1]} → ${parts[0]}`;
+  return `${route.alight.name} → ${route.board.name}`;
+}
+
 function RouteCard({
   route,
   onStart,
@@ -584,7 +633,7 @@ function RouteCard({
       <div className="mt-3 flex gap-2">
         <button
           type="button"
-          className={`${primary} h-11`}
+          className={`${primary} h-11 w-auto! flex-1`}
           onClick={() =>
             onStart({
               id: route.id,
@@ -599,6 +648,25 @@ function RouteCard({
           }
         >
           Iniciar
+        </button>
+        <button
+          type="button"
+          className={`${quiet} h-11 flex-1 text-sm`}
+          onClick={() =>
+            onStart({
+              id: route.id,
+              name: returnName(route),
+              mode: route.mode,
+              board: route.alight,
+              alight: route.board,
+              alertMeters: route.alertMeters,
+              startedAt: Date.now(),
+              alarmed: false,
+            })
+          }
+        >
+          <ArrowLeftRight className="size-4" />
+          Regreso
         </button>
         {compact ? null : armedDelete ? (
           <button
@@ -814,7 +882,7 @@ function PlaceField({
           <input
             value={q}
             onChange={(event) => setQ(event.target.value)}
-            placeholder="Nombre de estación o lugar"
+            placeholder="Estación, colonia o dirección"
             className="mt-2 h-12 w-full rounded-2xl border border-fg/10 bg-surface px-4 outline-none placeholder:text-muted focus:border-signal"
           />
           <div className="mt-2 flex gap-2">
@@ -1015,6 +1083,9 @@ function TripScreen({
       <p className="mt-1 text-sm text-muted">
         Subiste en {trip.board.name}. Alarma a {formatDistance(trip.alertMeters)}.
       </p>
+      <p className="mt-1 text-sm text-muted">
+        {distance != null ? walkingLabel(distance) : "El tiempo a pie aparece con la primera señal."}
+      </p>
       <div className="mt-5 overflow-hidden rounded-3xl">
         <RideMap
           center={fix ?? trip.alight}
@@ -1065,7 +1136,7 @@ function MapScreen({
       <input
         value={q}
         onChange={(event) => setQ(event.target.value)}
-        placeholder="Buscar estación o lugar"
+        placeholder="Estación, colonia o dirección"
         className="mt-3 h-12 w-full rounded-2xl border border-fg/10 bg-surface px-4 outline-none placeholder:text-muted focus:border-signal"
       />
       <div className="mt-2 flex gap-2">
@@ -1145,7 +1216,7 @@ function MapScreen({
       >
         Nueva ruta hasta aquí
       </button>
-      <p className="mt-3 text-xs text-muted">Mapa © OpenStreetMap, teselas OpenFreeMap. Búsqueda Photon.</p>
+      <p className="mt-3 text-xs text-muted">Mapa © OpenStreetMap, teselas OpenFreeMap. Búsqueda Nominatim.</p>
     </div>
   );
 }

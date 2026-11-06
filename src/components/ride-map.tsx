@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { GeoJSONSource, Map as MlMap, Marker } from "maplibre-gl";
 import { circleFeature } from "@/lib/geo";
 
-const STYLE = "https://tiles.openfreemap.org/styles/dark";
+const STYLE = "https://tiles.openfreemap.org/styles/liberty";
 const SIGNAL = "#e39a3c";
 const EMPTY = { type: "FeatureCollection" as const, features: [] };
 
@@ -35,6 +35,7 @@ export function RideMap({
   const onPickRef = useRef(onPick);
   const followed = useRef(false);
   const [ready, setReady] = useState(0);
+  const [failed, setFailed] = useState(false);
   onPickRef.current = onPick;
 
   useEffect(() => {
@@ -43,11 +44,12 @@ export function RideMap({
     void (async () => {
       const ml = await import("maplibre-gl");
       if (dead || !hostRef.current) return;
+      ml.setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
       map = new ml.Map({
         container: hostRef.current,
         style: STYLE,
         center: [center.lon, center.lat],
-        zoom: 12,
+        zoom: 13,
         attributionControl: { compact: true },
       });
       map.addControl(new ml.NavigationControl({ showCompass: false }), "top-right");
@@ -70,10 +72,13 @@ export function RideMap({
             paint: { "line-color": SIGNAL, "line-width": 1.5 },
           });
         }
+        map?.resize();
         setReady((value) => value + 1);
       });
       mapRef.current = map;
-    })();
+    })().catch(() => {
+      if (!dead) setFailed(true);
+    });
     const host = hostRef.current;
     const observer =
       host && typeof ResizeObserver !== "undefined"
@@ -137,9 +142,16 @@ export function RideMap({
   }, [board, alight, user, radiusMeters, ready]);
 
   return (
-    <div
-      ref={hostRef}
-      className={`overflow-hidden bg-surface ${onPick ? "cursor-crosshair" : ""} ${className ?? "h-72 w-full"}`}
-    />
+    <div className="relative">
+      <div
+        ref={hostRef}
+        className={`overflow-hidden bg-surface ${onPick ? "cursor-crosshair" : ""} ${className ?? "h-72 w-full"}`}
+      />
+      {failed ? (
+        <p className="pointer-events-none absolute inset-x-4 bottom-4 rounded-2xl bg-bg/90 px-3 py-2 text-sm text-fg">
+          El mapa no cargó. Puedes escribir la estación o la dirección.
+        </p>
+      ) : null}
+    </div>
   );
 }

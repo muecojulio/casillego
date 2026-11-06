@@ -44,3 +44,10 @@ export function clampMeters(value: number): number {
   if (!Number.isFinite(value)) return 500;
   return Math.min(2000, Math.max(150, Math.round(value / 50) * 50));
 }
+
+export function walkingLabel(meters: number): string {
+  if (!Number.isFinite(meters) || meters < 0) return "";
+  const minutes = meters / 75;
+  if (minutes < 1) return "menos de 1 min a pie, en línea recta";
+  return `unos ${Math.round(minutes)} min a pie, en línea recta`;
+}
