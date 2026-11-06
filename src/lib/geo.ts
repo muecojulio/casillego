@@ -51,3 +51,28 @@ export function walkingLabel(meters: number): string {
   if (minutes < 1) return "menos de 1 min a pie, en línea recta";
   return `unos ${Math.round(minutes)} min a pie, en línea recta`;
 }
+
+export function bearingDegrees(
+  from: { lat: number; lon: number },
+  to: { lat: number; lon: number },
+): number {
+  const p1 = (from.lat * Math.PI) / 180;
+  const p2 = (to.lat * Math.PI) / 180;
+  const dLon = ((to.lon - from.lon) * Math.PI) / 180;
+  const y = Math.sin(dLon) * Math.cos(p2);
+  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dLon);
+  return (((Math.atan2(y, x) * 180) / Math.PI) % 360 + 360) % 360;
+}
+
+const CARDINALS = ["norte", "noreste", "este", "sureste", "sur", "suroeste", "oeste", "noroeste"];
+
+export function sideLabel(bearing: number, heading: number | null): string {
+  const deg = ((bearing % 360) + 360) % 360;
+  if (heading == null || !Number.isFinite(heading)) return `Queda al ${CARDINALS[Math.round(deg / 45) % 8]}`;
+  let rel = (deg - heading + 360) % 360;
+  if (rel > 180) rel -= 360;
+  const abs = Math.abs(rel);
+  if (abs <= 35) return "Queda adelante";
+  if (abs >= 145) return "Queda atrás";
+  return rel > 0 ? "Queda a la derecha" : "Queda a la izquierda";
+}

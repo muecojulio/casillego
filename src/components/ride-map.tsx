@@ -13,6 +13,7 @@ type Props = {
   user?: Pin;
   board?: Pin;
   alight?: Pin;
+  via?: Pin;
   radiusMeters?: number;
   focus?: Pin;
   onPick?: (pin: { lat: number; lon: number }) => void;
@@ -24,6 +25,7 @@ export function RideMap({
   user = null,
   board = null,
   alight = null,
+  via = null,
   radiusMeters = 0,
   focus = null,
   onPick,
@@ -126,6 +128,7 @@ export function RideMap({
         markersRef.current.push(marker);
       };
       add(board, "casillego-board", "Subes");
+      add(via, "casillego-via", "Cambias");
       add(alight, "casillego-alight", "Bajas");
       add(user, "casillego-user", "Tú");
       const source = map.getSource("radius") as GeoJSONSource | undefined;
@@ -139,7 +142,7 @@ export function RideMap({
     return () => {
       cancelled = true;
     };
-  }, [board, alight, user, radiusMeters, ready]);
+  }, [board, alight, via, user, radiusMeters, ready]);
 
   return (
     <div className="relative">

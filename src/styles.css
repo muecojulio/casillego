@@ -101,6 +101,14 @@
   border: 2px solid var(--color-fg);
 }
 
+.casillego-via {
+  width: 14px;
+  height: 14px;
+  background: transparent;
+  border: 2px solid var(--color-signal);
+  border-radius: 3px;
+}
+
 .casillego-alight {
   width: 16px;
   height: 16px;

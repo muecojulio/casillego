@@ -23,6 +23,8 @@ export type SavedRoute = {
   mode: Mode;
   board: Place;
   alight: Place;
+  transfer?: Place | null;
+  note?: string;
   alertMeters: number;
   everyday: boolean;
   updatedAt: number;

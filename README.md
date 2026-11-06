@@ -1,6 +1,6 @@
 # Casillego
 
-Alarma de llegada para metro, Cablebús, tren y transporte público. Eliges dónde subes y dónde bajas, marcas a cuántos metros quieres el aviso y la app suena cuando estás cerca. Una ruta guardada también sirve de regreso. En el viaje ves los metros y un estimado a pie en línea recta. Al bajar, puedes guardar esa distancia como aviso.
+Alarma de llegada para metro, Cablebús, tren y transporte público. Eliges dónde subes, dónde cambias si hace falta y dónde bajas. Puedes dejar una nota, guardar casa y trabajo, y la ruta sirve de regreso. En el viaje ves metros, minutos a pie y de qué lado queda la parada. Si te pasas, avisa. Al bajar, puedes guardar esa distancia como aviso.
 
 Los recorridos cotidianos se guardan en el teléfono. No hay cuenta ni base de datos con tus paradas.
 

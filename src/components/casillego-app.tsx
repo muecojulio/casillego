@@ -22,7 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { acquireWake, releaseWake, startSiren, startVibrate, stopAlarm, unlockAudio } from "@/lib/alarm";
-import { CITY_CENTER, clampMeters, formatDistance, haversine, walkingLabel } from "@/lib/geo";
+import { CITY_CENTER, bearingDegrees, clampMeters, formatDistance, haversine, sideLabel, walkingLabel } from "@/lib/geo";
 import { nearbyPlaces, reversePlace, searchPlaces } from "@/lib/live.functions";
 import { useCasillego, type ActiveTrip } from "@/lib/store";
 import { MODES, modeLabel, type Mode, type Place, type SavedRoute } from "@/lib/types";
@@ -34,6 +34,8 @@ type Draft = {
   mode: Mode;
   board: Place | null;
   alight: Place | null;
+  transfer: Place | null;
+  note: string;
   alertMeters: number;
   everyday: boolean;
   name: string;
@@ -42,7 +44,7 @@ type Draft = {
 type View =
   | { id: Tab }
   | { id: "composer"; draft: Draft }
-  | { id: "pick"; draft: Draft; field: "board" | "alight" }
+  | { id: "pick"; draft: Draft; field: "board" | "alight" | "transfer" }
   | { id: "trip" };
 
 type Fix = { lat: number; lon: number; acc: number };
@@ -76,6 +78,8 @@ function blankDraft(meters: number): Draft {
     mode: "metro",
     board: null,
     alight: null,
+    transfer: null,
+    note: "",
     alertMeters: clampMeters(meters),
     everyday: true,
     name: "",
@@ -114,6 +118,11 @@ export function CasillegoApp() {
   const [silenced, setSilenced] = useState(false);
   const firedRef = useRef(false);
   const insideRef = useRef(0);
+  const closestRef = useRef(Number.POSITIVE_INFINITY);
+  const reachedRef = useRef(false);
+  const passedRef = useRef(0);
+  const [alarmKind, setAlarmKind] = useState<"near" | "passed">("near");
+  const [heading, setHeading] = useState<number | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -130,6 +139,7 @@ export function CasillegoApp() {
     if (!trip) {
       setDistance(null);
       setAlarming(false);
+      setAlarmKind("near");
       return;
     }
     if (trip.alarmed) {
@@ -138,8 +148,12 @@ export function CasillegoApp() {
     } else {
       firedRef.current = false;
       setAlarming(false);
+      setAlarmKind("near");
     }
     insideRef.current = 0;
+    closestRef.current = Number.POSITIVE_INFINITY;
+    reachedRef.current = false;
+    passedRef.current = 0;
     setGpsError(null);
     if (useCasillego.getState().settings.keepAwake) void acquireWake();
     if (!("geolocation" in navigator)) {
@@ -156,14 +170,27 @@ export function CasillegoApp() {
           acc: pos.coords.accuracy,
         };
         setFix(next);
-        const dist = haversine(next, current.alight);
+        const goal = current.leg === "transfer" && current.transfer ? current.transfer : current.alight;
+        const dist = haversine(next, goal);
         setDistance(dist);
+        if (dist < closestRef.current) closestRef.current = dist;
         const accOk = !Number.isFinite(next.acc) || next.acc < Math.max(90, current.alertMeters);
-        if (dist <= current.alertMeters && accOk) insideRef.current += 1;
-        else if (dist > current.alertMeters * 1.3) insideRef.current = 0;
-        if (insideRef.current >= 2 && !firedRef.current && !current.alarmed) {
+        if (dist <= current.alertMeters && accOk) {
+          insideRef.current += 1;
+          reachedRef.current = true;
+          passedRef.current = 0;
+        } else if (dist > current.alertMeters * 1.3) {
+          insideRef.current = 0;
+        }
+        if (reachedRef.current && dist > closestRef.current + 140 && dist > current.alertMeters) {
+          passedRef.current += 1;
+        }
+        const armed = !firedRef.current && !current.alarmed;
+        const kind = insideRef.current >= 2 ? "near" : passedRef.current >= 2 ? "passed" : null;
+        if (armed && kind) {
           firedRef.current = true;
           setSilenced(false);
+          setAlarmKind(kind);
           useCasillego.getState().markAlarmed();
           setAlarming(true);
           const prefs = useCasillego.getState().settings;
@@ -175,6 +202,22 @@ export function CasillegoApp() {
       { enableHighAccuracy: true, maximumAge: 4000, timeout: 20000 },
     );
     return () => navigator.geolocation.clearWatch(watch);
+  }, [trip?.startedAt, trip?.leg]);
+
+  useEffect(() => {
+    if (!trip) return;
+    const onOrient = (event: DeviceOrientationEvent) => {
+      const ios = (event as DeviceOrientationEvent & { webkitCompassHeading?: number }).webkitCompassHeading;
+      if (typeof ios === "number" && Number.isFinite(ios)) {
+        setHeading(ios);
+        return;
+      }
+      if (event.absolute && typeof event.alpha === "number" && Number.isFinite(event.alpha)) {
+        setHeading((360 - event.alpha + 360) % 360);
+      }
+    };
+    window.addEventListener("deviceorientation", onOrient);
+    return () => window.removeEventListener("deviceorientation", onOrient);
   }, [trip?.startedAt]);
 
   useEffect(() => {
@@ -199,17 +242,36 @@ export function CasillegoApp() {
     });
   }
 
+  function askCompass() {
+    const orientation = DeviceOrientationEvent as unknown as {
+      requestPermission?: () => Promise<string>;
+    };
+    if (typeof orientation.requestPermission === "function") {
+      void orientation.requestPermission().catch(() => undefined);
+    }
+  }
+
   function begin(draft: Draft) {
     if (!draft.board || !draft.alight) return;
     unlockAudio();
+    askCompass();
+    const transfer =
+      draft.transfer &&
+      haversine(draft.transfer, draft.board) >= 80 &&
+      haversine(draft.transfer, draft.alight) >= 80
+        ? draft.transfer
+        : null;
     const name = draft.name.trim() || `${draft.board.name} → ${draft.alight.name}`;
     const id = crypto.randomUUID();
+    const note = draft.note.trim().slice(0, 140);
     const saved: SavedRoute = {
       id,
       name,
       mode: draft.mode,
       board: draft.board,
       alight: draft.alight,
+      transfer,
+      note,
       alertMeters: draft.alertMeters,
       everyday: draft.everyday,
       updatedAt: Date.now(),
@@ -221,6 +283,9 @@ export function CasillegoApp() {
       mode: draft.mode,
       board: draft.board,
       alight: draft.alight,
+      transfer,
+      note,
+      leg: transfer ? "transfer" : "alight",
       alertMeters: draft.alertMeters,
       startedAt: Date.now(),
       alarmed: false,
@@ -229,13 +294,31 @@ export function CasillegoApp() {
 
   function launch(next: ActiveTrip) {
     unlockAudio();
+    askCompass();
     stopAlarm();
     setSilenced(false);
+    setAlarmKind("near");
     firedRef.current = false;
     insideRef.current = 0;
+    closestRef.current = Number.POSITIVE_INFINITY;
+    reachedRef.current = false;
+    passedRef.current = 0;
     useCasillego.getState().startTrip(next);
     if (useCasillego.getState().settings.keepAwake) void acquireWake();
     setView({ id: "trip" });
+  }
+
+  function continueLeg() {
+    stopAlarm();
+    firedRef.current = false;
+    insideRef.current = 0;
+    closestRef.current = Number.POSITIVE_INFINITY;
+    reachedRef.current = false;
+    passedRef.current = 0;
+    setSilenced(false);
+    setAlarming(false);
+    setAlarmKind("near");
+    useCasillego.getState().continueLeg();
   }
 
   function finish() {
@@ -247,6 +330,10 @@ export function CasillegoApp() {
     insideRef.current = 0;
     setAlarming(false);
     setSilenced(false);
+    setAlarmKind("near");
+    closestRef.current = Number.POSITIVE_INFINITY;
+    reachedRef.current = false;
+    passedRef.current = 0;
     useCasillego.getState().endTrip();
     if (current && meters != null && Number.isFinite(meters)) {
       useCasillego.getState().noteArrival({
@@ -300,6 +387,7 @@ export function CasillegoApp() {
               trip={trip}
               fix={fix}
               distance={distance}
+              heading={heading}
               gpsError={gpsError}
               onStop={finish}
             />
@@ -337,7 +425,9 @@ export function CasillegoApp() {
           className="press mx-4 mb-3 flex items-center justify-between rounded-full bg-signal px-4 py-3 text-left text-bg"
           onClick={() => setView({ id: "trip" })}
         >
-          <span className="text-sm font-medium">Viaje en curso · {trip.alight.name}</span>
+          <span className="text-sm font-medium">
+            Viaje en curso · {trip.leg === "transfer" && trip.transfer ? trip.transfer.name : trip.alight.name}
+          </span>
           <span className="font-display text-lg">
             {distance != null ? formatDistance(distance) : "GPS"}
           </span>
@@ -360,57 +450,96 @@ export function CasillegoApp() {
       ) : null}
 
       {alarming && trip ? (
-        <div className="fixed inset-0 z-50 flex flex-col bg-bg px-6 pb-10 pt-16">
-          <div className="relative mx-auto mt-4 size-40">
-            {!silenced ? (
-              <span className="absolute inset-0 rounded-full bg-signal/30 motion-safe:animate-ping" />
-            ) : null}
-            <span className="absolute inset-8 grid place-items-center rounded-full bg-signal text-bg">
-              <Bell className="size-8" />
-            </span>
-          </div>
-          <h2 className="mt-8 text-center font-display text-5xl leading-none">Ya casi llegas</h2>
-          <p className="mt-3 text-center text-lg text-fg">{trip.alight.name}</p>
-          <p className="mt-6 text-center font-display text-4xl text-signal">
-            {distance != null ? formatDistance(distance) : "Buscando señal"}
-          </p>
-          <p className="mt-2 text-center text-sm text-muted">
-            Aviso a {formatDistance(trip.alertMeters)}
-            {silenced ? " · silencio" : ""}
-          </p>
-          <div className="mt-auto grid gap-3">
-            <button
-              type="button"
-              className={quiet}
-              onClick={() => {
-                stopAlarm();
-                setSilenced(true);
-              }}
-            >
-              <Volume2 className="size-4" />
-              Silenciar
-            </button>
-            <button
-              type="button"
-              className={quiet}
-              onClick={() => {
-                stopAlarm();
-                firedRef.current = false;
-                insideRef.current = 0;
-                setSilenced(false);
-                setAlarming(false);
-                useCasillego.getState().rearm();
-              }}
-            >
-              Volver a armar
-            </button>
-            <button type="button" className={primary} onClick={finish}>
-              <Square className="size-4" />
-              Ya bajé
-            </button>
-          </div>
-        </div>
+        <AlarmOverlay
+          trip={trip}
+          kind={alarmKind}
+          distance={distance}
+          silenced={silenced}
+          onSilence={() => {
+            stopAlarm();
+            setSilenced(true);
+          }}
+          onRearm={() => {
+            stopAlarm();
+            firedRef.current = false;
+            insideRef.current = 0;
+            passedRef.current = 0;
+            reachedRef.current = false;
+            closestRef.current = Number.POSITIVE_INFINITY;
+            setSilenced(false);
+            setAlarming(false);
+            setAlarmKind("near");
+            useCasillego.getState().rearm();
+          }}
+          onContinue={continueLeg}
+          onFinish={finish}
+        />
       ) : null}
+    </div>
+  );
+}
+
+function AlarmOverlay({
+  trip,
+  kind,
+  distance,
+  silenced,
+  onSilence,
+  onRearm,
+  onContinue,
+  onFinish,
+}: {
+  trip: ActiveTrip;
+  kind: "near" | "passed";
+  distance: number | null;
+  silenced: boolean;
+  onSilence: () => void;
+  onRearm: () => void;
+  onContinue: () => void;
+  onFinish: () => void;
+}) {
+  const changing = kind === "near" && trip.leg === "transfer" && trip.transfer;
+  const goal = changing ? trip.transfer : trip.alight;
+  const title = kind === "passed" ? "Ya te pasaste" : changing ? "Aquí cambias" : "Ya casi llegas";
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-bg px-6 pb-10 pt-16">
+      <div className="relative mx-auto mt-4 size-40">
+        {!silenced ? <span className="absolute inset-0 rounded-full bg-signal/30 motion-safe:animate-ping" /> : null}
+        <span className="absolute inset-8 grid place-items-center rounded-full bg-signal text-bg">
+          <Bell className="size-8" />
+        </span>
+      </div>
+      <h2 className="mt-8 text-center font-display text-5xl leading-none">{title}</h2>
+      <p className="mt-3 text-center text-lg text-fg">{goal?.name}</p>
+      {kind === "passed" ? (
+        <p className="mt-2 text-center text-sm text-muted">La parada quedó atrás.</p>
+      ) : null}
+      <p className="mt-6 text-center font-display text-4xl text-signal">
+        {distance != null ? formatDistance(distance) : "Buscando señal"}
+      </p>
+      <p className="mt-2 text-center text-sm text-muted">
+        Aviso a {formatDistance(trip.alertMeters)}
+        {silenced ? " · silencio" : ""}
+      </p>
+      <div className="mt-auto grid gap-3">
+        <button type="button" className={quiet} onClick={onSilence}>
+          <Volume2 className="size-4" />
+          Silenciar
+        </button>
+        <button type="button" className={quiet} onClick={onRearm}>
+          Volver a armar
+        </button>
+        {trip.transfer && trip.leg === "transfer" ? (
+          <button type="button" className={primary} onClick={onContinue}>
+            Sigo a {trip.alight.name}
+          </button>
+        ) : (
+          <button type="button" className={primary} onClick={onFinish}>
+            <Square className="size-4" />
+            Ya bajé
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -626,7 +755,9 @@ function RouteCard({
           <p className="truncate font-medium">{route.name}</p>
           <p className="mt-1 truncate text-sm text-muted">
             {modeLabel(route.mode)} · {route.board.name} → {route.alight.name}
+            {route.transfer ? ` · cambias en ${route.transfer.name}` : ""}
           </p>
+          {route.note ? <p className="mt-1 truncate text-sm text-fg">{route.note}</p> : null}
           <p className="mt-1 text-sm text-signal">Aviso a {formatDistance(route.alertMeters)}</p>
         </div>
       </div>
@@ -641,6 +772,9 @@ function RouteCard({
               mode: route.mode,
               board: route.board,
               alight: route.alight,
+              transfer: route.transfer ?? null,
+              note: route.note ?? "",
+              leg: route.transfer ? "transfer" : "alight",
               alertMeters: route.alertMeters,
               startedAt: Date.now(),
               alarmed: false,
@@ -659,6 +793,9 @@ function RouteCard({
               mode: route.mode,
               board: route.alight,
               alight: route.board,
+              transfer: route.transfer ?? null,
+              note: route.note ?? "",
+              leg: route.transfer ? "transfer" : "alight",
               alertMeters: route.alertMeters,
               startedAt: Date.now(),
               alarmed: false,
@@ -704,12 +841,16 @@ function Composer({
   fix: Fix | null;
   onChange: (draft: Draft) => void;
   onClose: () => void;
-  onPick: (field: "board" | "alight") => void;
+  onPick: (field: "board" | "alight" | "transfer") => void;
   onLocate: (fix: Fix) => void;
   onStart: () => void;
 }) {
   const same =
     draft.board && draft.alight ? haversine(draft.board, draft.alight) < 80 : false;
+  const transferClose =
+    draft.transfer != null &&
+    ((draft.board && haversine(draft.transfer, draft.board) < 80) ||
+      (draft.alight && haversine(draft.transfer, draft.alight) < 80));
   const ready = Boolean(draft.board && draft.alight && !same);
   return (
     <div className="flex min-h-dvh flex-col">
@@ -739,6 +880,18 @@ function Composer({
           onPickMap={() => onPick("alight")}
           onLocate={onLocate}
         />
+        <PlaceField
+          label="Dónde cambias, si hace falta"
+          mode={draft.mode}
+          value={draft.transfer}
+          bias={fix}
+          onChange={(transfer) => onChange({ ...draft, transfer })}
+          onPickMap={() => onPick("transfer")}
+          onLocate={onLocate}
+        />
+        {transferClose ? (
+          <p className="text-sm text-signal">El cambio tiene que ser otro punto. Si no, se ignora.</p>
+        ) : null}
         <DistancePicker
           meters={draft.alertMeters}
           onChange={(alertMeters) => onChange({ ...draft, alertMeters })}
@@ -751,6 +904,15 @@ function Composer({
             placeholder={
               draft.board && draft.alight ? `${draft.board.name} → ${draft.alight.name}` : "Casa → trabajo"
             }
+            className="mt-2 h-12 w-full rounded-2xl border border-fg/10 bg-surface px-4 outline-none placeholder:text-muted focus:border-signal"
+          />
+        </label>
+        <label className="block">
+          <span className="text-sm text-muted">Nota para ti</span>
+          <input
+            value={draft.note}
+            onChange={(event) => onChange({ ...draft, note: event.target.value.slice(0, 140) })}
+            placeholder="Baja por la puerta de atrás"
             className="mt-2 h-12 w-full rounded-2xl border border-fg/10 bg-surface px-4 outline-none placeholder:text-muted focus:border-signal"
           />
         </label>
@@ -834,6 +996,8 @@ function PlaceField({
   const [error, setError] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
   const req = useRef(0);
+  const casa = useCasillego((state) => state.anchors?.casa ?? null);
+  const trabajo = useCasillego((state) => state.anchors?.trabajo ?? null);
 
   useEffect(() => {
     if (q.trim().length < 2) {
@@ -868,15 +1032,33 @@ function PlaceField({
     <div>
       <p className="text-sm text-muted">{label}</p>
       {value ? (
-        <div className="mt-2 flex items-center justify-between gap-3 rounded-2xl bg-surface px-4 py-3">
-          <div className="min-w-0">
-            <p className="truncate font-medium">{value.name}</p>
-            <p className="truncate text-sm text-muted">{value.detail}</p>
+        <>
+          <div className="mt-2 flex items-center justify-between gap-3 rounded-2xl bg-surface px-4 py-3">
+            <div className="min-w-0">
+              <p className="truncate font-medium">{value.name}</p>
+              <p className="truncate text-sm text-muted">{value.detail}</p>
+            </div>
+            <button type="button" className="text-sm text-signal" onClick={() => onChange(null)}>
+              Cambiar
+            </button>
           </div>
-          <button type="button" className="text-sm text-signal" onClick={() => onChange(null)}>
-            Cambiar
-          </button>
-        </div>
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              className="press h-9 rounded-full bg-bg px-3 text-sm text-muted"
+              onClick={() => useCasillego.getState().setAnchor("casa", value)}
+            >
+              Es mi casa
+            </button>
+            <button
+              type="button"
+              className="press h-9 rounded-full bg-bg px-3 text-sm text-muted"
+              onClick={() => useCasillego.getState().setAnchor("trabajo", value)}
+            >
+              Es mi trabajo
+            </button>
+          </div>
+        </>
       ) : (
         <>
           <input
@@ -920,6 +1102,24 @@ function PlaceField({
               En el mapa
             </button>
           </div>
+          {casa || trabajo ? (
+            <div className="mt-2 flex gap-2">
+              {casa ? (
+                <button type="button" className="press h-9 rounded-full bg-surface px-3 text-sm" onClick={() => onChange(casa)}>
+                  Casa
+                </button>
+              ) : null}
+              {trabajo ? (
+                <button
+                  type="button"
+                  className="press h-9 rounded-full bg-surface px-3 text-sm"
+                  onClick={() => onChange(trabajo)}
+                >
+                  Trabajo
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {loading ? <p className="mt-2 text-sm text-muted">Buscando en vivo…</p> : null}
           {error ? <p className="mt-2 text-sm text-signal">{error}</p> : null}
           {hits.length > 0 ? (
@@ -996,18 +1196,22 @@ function PickScreen({
   onUse,
 }: {
   draft: Draft;
-  field: "board" | "alight";
+  field: "board" | "alight" | "transfer";
   fix: Fix | null;
   onCancel: () => void;
   onUse: (place: Place) => void;
 }) {
-  const [pin, setPin] = useState<Place | null>(field === "board" ? draft.board : draft.alight);
+  const [pin, setPin] = useState<Place | null>(
+    field === "board" ? draft.board : field === "transfer" ? draft.transfer : draft.alight,
+  );
   const [busy, setBusy] = useState(false);
   return (
     <div className="flex min-h-dvh flex-col">
       <header className="flex items-center justify-between px-5 py-4">
         <div>
-          <p className="text-sm text-muted">{field === "board" ? "Dónde subes" : "Dónde bajas"}</p>
+          <p className="text-sm text-muted">
+            {field === "board" ? "Dónde subes" : field === "transfer" ? "Dónde cambias" : "Dónde bajas"}
+          </p>
           <h1 className="font-display text-3xl">Toca el mapa</h1>
         </div>
         <button type="button" className={`${quiet} h-11`} onClick={onCancel}>
@@ -1020,6 +1224,7 @@ function PickScreen({
         user={fix}
         board={field === "board" ? pin : draft.board}
         alight={field === "alight" ? pin : draft.alight}
+        via={field === "transfer" ? pin : draft.transfer}
         radiusMeters={field === "alight" ? draft.alertMeters : 0}
         focus={pin}
         onPick={(next) => {
@@ -1059,17 +1264,21 @@ function TripScreen({
   trip,
   fix,
   distance,
+  heading,
   gpsError,
   onStop,
 }: {
   trip: ActiveTrip;
   fix: Fix | null;
   distance: number | null;
+  heading: number | null;
   gpsError: string | null;
   onStop: () => void;
 }) {
   const Icon = modeIcon(trip.mode);
+  const goal = trip.leg === "transfer" && trip.transfer ? trip.transfer : trip.alight;
   const inside = distance != null && distance <= trip.alertMeters;
+  const aim = fix ? sideLabel(bearingDegrees(fix, goal), heading) : "";
   return (
     <div className="flex-1 px-5 pt-8 pb-4">
       <p className="flex items-center gap-2 text-sm text-muted">
@@ -1079,21 +1288,29 @@ function TripScreen({
       <h1 className="mt-3 font-display text-6xl leading-none">
         {distance != null ? formatDistance(distance) : "—"}
       </h1>
-      <p className="mt-3 text-lg">para bajar en {trip.alight.name}</p>
-      <p className="mt-1 text-sm text-muted">
-        Subiste en {trip.board.name}. Alarma a {formatDistance(trip.alertMeters)}.
+      <p className="mt-3 text-lg">
+        {trip.leg === "transfer" && trip.transfer ? "para cambiar en" : "para bajar en"} {goal.name}
       </p>
+      <p className="mt-1 text-sm text-muted">
+        Subiste en {trip.board.name}.
+        {trip.transfer && trip.leg !== "transfer" ? ` Cambiaste en ${trip.transfer.name}.` : ""}
+        {trip.transfer && trip.leg === "transfer" ? ` Luego bajas en ${trip.alight.name}.` : ""} Alarma a{" "}
+        {formatDistance(trip.alertMeters)}.
+      </p>
+      {trip.note ? <p className="mt-2 text-sm text-fg">{trip.note}</p> : null}
       <p className="mt-1 text-sm text-muted">
         {distance != null ? walkingLabel(distance) : "El tiempo a pie aparece con la primera señal."}
       </p>
+      {aim ? <p className="mt-1 text-sm text-signal">{aim}</p> : null}
       <div className="mt-5 overflow-hidden rounded-3xl">
         <RideMap
-          center={fix ?? trip.alight}
+          center={fix ?? goal}
           user={fix}
           board={trip.board}
-          alight={trip.alight}
+          via={trip.leg === "transfer" ? trip.alight : trip.transfer}
+          alight={goal}
           radiusMeters={trip.alertMeters}
-          focus={trip.alight}
+          focus={goal}
         />
       </div>
       <p className={`mt-3 text-sm ${inside ? "text-signal" : "text-muted"}`}>
@@ -1223,6 +1440,7 @@ function MapScreen({
 
 function SettingsScreen({ fix, onFix }: { fix: Fix | null; onFix: (fix: Fix) => void }) {
   const settings = useCasillego((state) => state.settings);
+  const anchors = useCasillego((state) => state.anchors);
   const update = useCasillego((state) => state.updateSettings);
   const [confirmClear, setConfirmClear] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -1231,6 +1449,13 @@ function SettingsScreen({ fix, onFix }: { fix: Fix | null; onFix: (fix: Fix) => 
   return (
     <div className="flex-1 space-y-4 px-5 pt-8 pb-6">
       <h1 className="font-display text-4xl">Ajustes</h1>
+      <AnchorRow label="Casa" place={anchors?.casa ?? null} onClear={() => useCasillego.getState().setAnchor("casa", null)} />
+      <AnchorRow
+        label="Trabajo"
+        place={anchors?.trabajo ?? null}
+        onClear={() => useCasillego.getState().setAnchor("trabajo", null)}
+      />
+      <p className="text-sm text-muted">Se guardan al elegir un punto y tocar “Es mi casa” o “Es mi trabajo”.</p>
       <DistancePicker
         meters={settings.defaultAlertMeters}
         onChange={(defaultAlertMeters) => update({ defaultAlertMeters })}
@@ -1302,6 +1527,30 @@ function SettingsScreen({ fix, onFix }: { fix: Fix | null; onFix: (fix: Fix) => 
         Deja la app abierta mientras viajas. El aviso mide la distancia a tu bajada con el GPS del
         teléfono. No sigue el recorrido del metro por dentro del túnel si no hay señal.
       </p>
+    </div>
+  );
+}
+
+function AnchorRow({
+  label,
+  place,
+  onClear,
+}: {
+  label: string;
+  place: Place | null;
+  onClear: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-3xl bg-surface px-4 py-3">
+      <div className="min-w-0">
+        <p className="text-sm text-muted">{label}</p>
+        <p className="truncate font-medium">{place ? place.name : "Sin definir"}</p>
+      </div>
+      {place ? (
+        <button type="button" className="text-sm text-signal" onClick={onClear}>
+          Quitar
+        </button>
+      ) : null}
     </div>
   );
 }
