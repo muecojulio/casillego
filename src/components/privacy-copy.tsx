@@ -25,6 +25,11 @@ export function PrivacyCopy() {
           <li>El mapa se dibuja con teselas de OpenFreeMap, también de OpenStreetMap.</li>
         </ul>
         <p>
+          Después de abrir Casillego una vez con internet, puede volver a abrirse sin conexión. La
+          alarma, las rutas guardadas y el GPS del teléfono no necesitan red. Buscar una parada
+          nueva y ver calles que no habías abierto sí la necesitan.
+        </p>
+        <p>
           Esas consultas sirven para encontrar la parada. No se adjuntan a una cuenta, no se
           venden y no hay publicidad ni rastreadores de Casillego.
         </p>

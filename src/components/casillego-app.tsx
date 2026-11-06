@@ -27,6 +27,7 @@ import { nearbyPlaces, reversePlace, searchPlaces, stationExits } from "@/lib/li
 import { useCasillego, type ActiveTrip } from "@/lib/store";
 import { MODES, modeLabel, type Mode, type Place, type SavedRoute } from "@/lib/types";
 import { RideMap } from "@/components/ride-map";
+import { useOnline } from "@/components/offline-ready";
 
 type Tab = "hoy" | "rutas" | "mapa" | "ajustes";
 
@@ -111,6 +112,7 @@ export function CasillegoApp() {
   const settings = useCasillego((state) => state.settings);
   const trip = useCasillego((state) => state.trip);
   const [view, setView] = useState<View>({ id: "hoy" });
+  const online = useOnline();
   const [fix, setFix] = useState<Fix | null>(null);
   const [distance, setDistance] = useState<number | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
@@ -355,6 +357,11 @@ export function CasillegoApp() {
           ? `Ya casi llegas a ${trip.alight.name}. ${distance != null ? formatDistance(distance) : ""}`
           : ""}
       </p>
+      {online ? null : (
+        <p className="bg-surface px-5 py-2 text-sm text-muted">
+          Sin conexión. La alarma y las rutas guardadas siguen en el teléfono.
+        </p>
+      )}
       {view.id === "composer" ? (
         <Composer
           draft={view.draft}
@@ -388,6 +395,7 @@ export function CasillegoApp() {
               fix={fix}
               distance={distance}
               heading={heading}
+              online={online}
               gpsError={gpsError}
               onStop={finish}
             />
@@ -1072,6 +1080,12 @@ function PlaceField({
       setError(null);
       return;
     }
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setHits([]);
+      setLoading(false);
+      setError("Sin conexión. Usa casa, trabajo o una ruta ya guardada.");
+      return;
+    }
     const id = ++req.current;
     const timer = window.setTimeout(() => {
       setLoading(true);
@@ -1174,6 +1188,17 @@ function PlaceField({
                 void here()
                   .then(async (next) => {
                     onLocate(next);
+                    if (typeof navigator !== "undefined" && !navigator.onLine) {
+                      onChange({
+                        id: `me:${next.lat.toFixed(4)}`,
+                        name: "Mi ubicación",
+                        detail: "Punto actual, sin conexión",
+                        lat: next.lat,
+                        lon: next.lon,
+                        kind: "Aquí",
+                      });
+                      return;
+                    }
                     const rev = await reversePlace({ data: { lat: next.lat, lon: next.lon } });
                     onChange(
                       rev.place ?? {
@@ -1342,6 +1367,10 @@ function PickScreen({
           disabled={!pin || busy}
           onClick={() => {
             if (!pin) return;
+            if (typeof navigator !== "undefined" && !navigator.onLine) {
+              onUse(pin);
+              return;
+            }
             setBusy(true);
             void reversePlace({ data: { lat: pin.lat, lon: pin.lon } })
               .then((result) => onUse(result.place ?? pin))
@@ -1361,6 +1390,7 @@ function TripScreen({
   fix,
   distance,
   heading,
+  online,
   gpsError,
   onStop,
 }: {
@@ -1368,6 +1398,7 @@ function TripScreen({
   fix: Fix | null;
   distance: number | null;
   heading: number | null;
+  online: boolean;
   gpsError: string | null;
   onStop: () => void;
 }) {
@@ -1398,6 +1429,9 @@ function TripScreen({
         {distance != null ? walkingLabel(distance) : "El tiempo a pie aparece con la primera señal."}
       </p>
       {aim ? <p className="mt-1 text-sm text-signal">{aim}</p> : null}
+      {online ? null : (
+        <p className="mt-1 text-sm text-muted">Sin conexión. La alarma mide con el GPS del teléfono.</p>
+      )}
       <div className="mt-5 overflow-hidden rounded-3xl">
         <RideMap
           center={fix ?? goal}
@@ -1457,6 +1491,10 @@ function MapScreen({
           type="button"
           className={`${quiet} h-11 flex-1 text-sm`}
           onClick={() => {
+            if (typeof navigator !== "undefined" && !navigator.onLine) {
+              setError("Sin conexión. El GPS sigue; las estaciones cercanas no.");
+              return;
+            }
             setLoading(true);
             void here()
               .then(async (next) => {
@@ -1478,6 +1516,11 @@ function MapScreen({
           className={`${quiet} h-11 flex-1 text-sm`}
           disabled={q.trim().length < 2 || loading}
           onClick={() => {
+            if (typeof navigator !== "undefined" && !navigator.onLine) {
+              setHits([]);
+              setError("Sin conexión. Usa una ruta ya guardada.");
+              return;
+            }
             setLoading(true);
             void searchPlaces({
               data: { q: q.trim(), mode, lat: fix?.lat, lon: fix?.lon },
